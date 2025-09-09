@@ -1,0 +1,285 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+# ==============================================
+# ChIP-seq Analysis with DESeq2
+# Two conditions
+# ==============================================
+```
+
+```{r}
+# -------------------------------
+# 1. Load Required Packages
+# -------------------------------
+library(DESeq2)          
+library(ggplot2)         
+library(pheatmap)        
+```
+
+```{r}
+# -------------------------------
+# 2. Set Working Directory
+# -------------------------------
+setwd("C:/ChIP_seq_analysis")
+```
+
+```{r}
+# -------------------------------
+# 3. Load Data
+# -------------------------------
+# Raw counts: rows = peaks, columns = samples
+raw_counts <- readRDS("data/ChIP-seq_RawCounts.Rds")
+raw_counts <- raw_counts[, -((ncol(raw_counts)-5):ncol(raw_counts))] 
+head(raw_counts)
+```
+
+```{r}
+# Sample metadata
+cell_type = factor(c(rep("squamous",3),rep("adeno", 3),rep("squamous",3),rep("adeno", 3)))
+
+colData <- data.frame(
+  condition = factor(c(rep("Normal",6), rep("Tumor",6))),
+  cellType = factor(cell_type),
+  row.names = colnames(raw_counts)
+)
+colData
+```
+
+```{r}
+# in alphabetical order
+# By default, the first level of each factor is taken as the reference.
+# Reference for condition = "Normal"
+# Reference for cellType = "adeno"
+
+levels(colData$condition)
+levels(colData$cellType)
+```
+
+```{r}
+# -------------------------------
+# 4. Create DESeq2 Dataset
+# -------------------------------
+dds <- DESeqDataSetFromMatrix(
+  countData = raw_counts,
+  colData = colData,
+  design = ~ condition + cellType
+)
+```
+
+```{r}
+# Run DESeq2
+dds <- DESeq(dds)
+```
+
+```{r}
+# Check results names
+resultsNames(dds)  
+
+# condition_Tumor_vs_Normal: how Tumor differs from Normal on average, regardless of whether samples are squamous or adeno.
+# cellType_squamous_vs_adeno: how squamous differs from adeno on average, regardless of whether samples are Normal or Tumor.
+```
+
+```{r}
+# -------------------------------
+# 6. Variance-Stabilizing Transformation (VST) & PCA
+# -------------------------------
+vsdata <- vst(dds, blind = FALSE)
+
+# PCA plot
+plotPCA(vsdata, intgroup = "condition") +
+  theme_grey() +
+  labs(title = "PCA of ChIP-seq Samples")
+
+```
+```{r}
+# PCA plot
+plotPCA(vsdata, intgroup = "cellType") +
+  theme_grey() +
+  labs(title = "PCA of ChIP-seq Samples")
+```
+
+```{r}
+# -------------------------------
+# 7. Differential Analysis: Tumor vs Normal
+# -------------------------------
+res <- results(dds, contrast = c("condition", "Tumor", "Normal"))
+
+# or use
+# res <- results(dds, name = "condition_Tumor_vs_Normal")
+
+```
+
+```{r}
+# Remove NA values
+res <- na.omit(res)
+res.df <- as.data.frame(res)
+res.df
+```
+
+```{r}
+# Identify significant peaks
+sigs.df <- res.df[
+  res.df$padj < 0.05 & abs(res.df$log2FoldChange) > 1,
+]
+sigs.df
+```
+
+```{r}
+# -------------------------------
+# 8. Volcano Plot
+# -------------------------------
+res.df$significant <- "No"
+res.df$significant[res.df$padj < 0.05 & res.df$log2FoldChange > 1] <- "Up"
+res.df$significant[res.df$padj < 0.05 & res.df$log2FoldChange < -1] <- "Down"
+
+ggplot(res.df, aes(x = log2FoldChange, y = -log10(padj), color = significant)) +
+  geom_point(alpha = 0.6) +
+  scale_color_manual(values = c("No" = "grey", "Up" = "red", "Down" = "blue")) +
+  theme_minimal() +
+  labs(
+    title = "Volcano Plot: Tumor vs Normal",
+    x = "Log2 Fold Change",
+    y = "-log10(FDR)"
+  )
+```
+```{r}
+# -------------------------------
+# 7. Differential Analysis: Squamous vs Adeno
+# -------------------------------
+
+res_celltype <- results(dds, contrast = c("cellType", "squamous", "adeno"))
+
+any(is.na(res_celltype))
+
+res_celltype <- na.omit(res_celltype)
+res_celltype.df <- as.data.frame(res_celltype)
+
+sigs_celltype.df <- res_celltype.df[
+  res_celltype.df$padj < 0.05 & abs(res_celltype.df$log2FoldChange) > 1 ,
+]
+sigs_celltype.df
+```
+```{r}
+# Volcano plot
+res_celltype.df$significant <- "No"
+res_celltype.df$significant[res_celltype.df$padj < 0.05 & res_celltype.df$log2FoldChange > 1] <- "Up"
+res_celltype.df$significant[res_celltype.df$padj < 0.05 & res_celltype.df$log2FoldChange < -1] <- "Down"
+
+ggplot(res_celltype.df, aes(x=log2FoldChange, y=-log10(padj), color=significant)) +
+  geom_point(alpha=0.6) +
+  scale_color_manual(values=c("No"="grey", "Up"="red", "Down"="blue")) +
+  theme_minimal() +
+  labs(title="Volcano Plot: Squamous vs Adeno", x="Log2 Fold Change", y="-log10(FDR)")
+```
+
+```{r}
+# -------------------------------
+# 9. Sample Correlation Heatmap
+# -------------------------------
+mat <- counts(dds, normalized = TRUE)
+cor_mat <- cor(mat, method = "pearson")  # Pearson correlation
+
+pheatmap(
+  cor_mat,
+  color = colorRampPalette(c("blue", "white", "red"))(100),
+  annotation_col = colData,
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  fontsize_row = 8,
+  fontsize_col = 8,
+  border_color = NA
+)
+```
+
+```{r}
+# -------------------------------
+# 10. Heatmap of Significant Peaks Tumor vs Normal
+# -------------------------------
+mat_sig <- counts(dds, normalized = TRUE)[rownames(sigs.df), ]
+
+# Scale rows (z-score)
+mat_sig.z <- t(apply(mat_sig, 1, scale))
+colnames(mat_sig.z) <- colnames(mat_sig)
+
+pheatmap(
+  mat_sig.z,
+  color = colorRampPalette(c("blue", "white", "red"))(100),
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  show_rownames = FALSE,
+  annotation_col = colData
+)
+```
+
+```{r}
+# -------------------------------
+# 11. Top Peaks Heatmap Tumor vs Normal
+# -------------------------------
+# Select top 30 peaks by absolute log2 fold change
+top_peaks <- rownames(sigs.df[order(abs(sigs.df$log2FoldChange), decreasing = TRUE), ])[1:30]
+mat_top <- counts(dds, normalized = TRUE)[top_peaks, ]
+
+# Scale rows
+mat_top.z <- t(apply(mat_top, 1, scale))
+colnames(mat_top.z) <- colnames(mat_top)
+
+pheatmap(
+  mat_top.z,
+  color = colorRampPalette(c("blue", "white", "red"))(100),
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  show_rownames = TRUE,
+  annotation_col = colData,
+  border_color = NA,
+  fontsize_row = 6,
+  fontsize_col = 6
+)
+```
+```{r}
+# 10. Heatmap of Significant Peaks Squamous vs Adeno
+# -------------------------------
+mat_sig <- counts(dds, normalized = TRUE)[rownames(sigs_celltype.df), ]
+
+# Scale rows (z-score)
+mat_sig.z <- t(apply(mat_sig, 1, scale))
+colnames(mat_sig.z) <- colnames(mat_sig)
+
+pheatmap(
+  mat_sig.z,
+  color = colorRampPalette(c("blue", "white", "red"))(100),
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  show_rownames = FALSE,
+  annotation_col = colData,
+  border_color = NA
+)
+```
+```{r}
+# -------------------------------
+# 11. Top Peaks Heatmap Squamous vs Adeno
+# -------------------------------
+# Select top 30 peaks by absolute log2 fold change
+top_peaks <- rownames(sigs_celltype.df[order(abs(sigs_celltype.df$log2FoldChange), decreasing = TRUE), ])[1:30]
+mat_top <- counts(dds, normalized = TRUE)[top_peaks, ]
+
+# Scale rows
+mat_top.z <- t(apply(mat_top, 1, scale))
+colnames(mat_top.z) <- colnames(mat_top)
+
+pheatmap(
+  mat_top.z,
+  color = colorRampPalette(c("blue", "white", "red"))(100),
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  show_rownames = TRUE,
+  annotation_col = colData,
+  border_color = NA,
+  fontsize_row = 6,
+  fontsize_col = 6
+)
+```
+
+

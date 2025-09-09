@@ -1,24 +1,31 @@
+# title: "ChIP-seq Analysis with DESeq2"
+
+# Load packages
 library("DESeq2")
 library(ggplot2)
 library(ComplexHeatmap)
 library(pheatmap)
 
+# Set Working Directory
 setwd("C:/ChIP_seq_analysis")
 
-# peaks x samples
+# Load Raw Counts: peaks x samples
 
 raw_counts <- readRDS("data/ChIP-seq_RawCounts.Rds")
-# head(raw_counts)
+
+# Sample Metadata
 
 colData <- data.frame(
   condition = factor(c(rep("Normal",6), rep("Tumor",6), rep("Encode",6))),
   row.names = colnames(raw_counts)
 )
+# Check factor levels
+# in alphabetical order of conditions: "Encode" "Normal" "Tumor" 
+# as a result Encode will be used as reference
 
 levels(colData$condition) 
 
-# in alphabetical order of conditions: "Encode" "Normal" "Tumor" 
-# as a result Encode will be used as reference
+# Create DESeq2 Dataset
 
 dds <- DESeqDataSetFromMatrix(countData = raw_counts,
                               colData = colData,
@@ -38,13 +45,11 @@ dds <- DESeq(dds)
 resultsNames(dds)
 
 
-# Variance-stabilizing transformation
+# Variance-Stabilizing Transformation and PCA
 vsdata <- vst(dds, blind = FALSE)
-
-# PCA
 plotPCA(vsdata, intgroup="condition")+ theme_grey()
 
-# Tumor vs Normal
+# Differential Analysis: Tumor vs Normal
 res <- results(dds, contrast=c("condition","Tumor","Normal"))
 
 # or
@@ -61,7 +66,7 @@ sigs.df <- res.df[
     abs(res.df$log2FoldChange) > 1 ,
 ]
 
-
+# Volcano plot
 
 res.df$significant <- "No"
 res.df$significant[res.df$padj < 0.05 & res.df$log2FoldChange > 1] <- "Up"
@@ -74,6 +79,7 @@ ggplot(res.df, aes(x=log2FoldChange, y=-log10(padj), color=significant)) +
   theme_minimal() +
   labs(title="Volcano Plot: Tumor vs Normal", x="Log2 Fold Change", y="-log10(FDR)")
 
+# Sample Correlation Heatmap
 
 mat <- counts(dds, normalized = TRUE)
 cor_mat <- cor(mat, method = "pearson")  # or method = "spearman"
@@ -87,7 +93,7 @@ pheatmap(cor_mat,
          fontsize_col = 8,
          border_color = NA)
 
-# Extract matrix for significant peaks only
+# Heatmap of Significant Peaks
 
 mat <- counts(dds, normalized = TRUE)[rownames(sigs.df), ]
 mat.z <- t(apply(mat, 1, scale)) # Compute row variance
@@ -101,7 +107,7 @@ pheatmap(mat.z,
          show_rownames = FALSE,    
          annotation_col = colData)
 
-# show top peaks
+# Top Peaks Heatmap
 
 top_peaks <- rownames(sigs.df[order(abs(sigs.df$log2FoldChange), decreasing = TRUE), ])[1:30]
 mat_top <- counts(dds, normalized = TRUE)[top_peaks, ]
